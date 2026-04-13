@@ -1,0 +1,97 @@
+# =============================================================================
+# Trivy SCA (Software Composition Analysis) — Production Hardened
+# =============================================================================
+# All actions pinned to full commit SHA to prevent tag-hijacking attacks.
+# Context: On 2026-03-19, trivy-action had 76/77 version tags force-pushed
+# to credential-stealing malware. SHA pinning is the ONLY immutable defence.
+#
+# No GHAS/SARIF license required — results are printed in the job log and
+# stored as a downloadable workflow artifact.
+#
+# Keep SHAs updated via Dependabot (github-actions ecosystem).
+# =============================================================================
+
+name: Trivy SCA Scan
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  push:
+    branches: [main, master]
+  schedule:
+    # Weekly full scan — catches newly disclosed CVEs in existing deps
+    - cron: '30 2 * * 1'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  trivy-sca:
+    name: SCA Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # -----------------------------------------------------------------
+      # 1. Checkout
+      # -----------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      # -----------------------------------------------------------------
+      # 2. Trivy — Full report (always runs, saved as artifact)
+      # -----------------------------------------------------------------
+      - name: Trivy SCA full report
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 — VERIFIED SAFE
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          output: 'trivy-results.txt'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          vuln-type: 'library'
+          scanners: 'vuln'
+
+      # -----------------------------------------------------------------
+      # 3. Print results in job log for quick review
+      # -----------------------------------------------------------------
+      - name: Display Trivy results
+        if: always()
+        run: |
+          echo "============================================"
+          echo "  TRIVY SCA SCAN RESULTS"
+          echo "============================================"
+          if [ -f trivy-results.txt ]; then
+            cat trivy-results.txt
+          else
+            echo "No results file generated."
+          fi
+
+      # -----------------------------------------------------------------
+      # 4. Upload results as workflow artifact (downloadable for 90 days)
+      # -----------------------------------------------------------------
+      - name: Upload Trivy report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        if: always()
+        with:
+          name: trivy-sca-report
+          path: trivy-results.txt
+          retention-days: 90
+
+      # -----------------------------------------------------------------
+      # 5. Trivy — Gate (blocks the PR on CRITICAL / HIGH)
+      # -----------------------------------------------------------------
+      - name: Trivy SCA gate
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0 — VERIFIED SAFE
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1'                    # ← Fail the check on findings
+          severity: 'CRITICAL,HIGH'         # ← PR-blocking threshold
+          vuln-type: 'library'              # ← SCA only (dependency vulns)
+          ignore-unfixed: true              # ← Skip vulns with no available fix
+          scanners: 'vuln'                  # ← Vulnerability scanner only
